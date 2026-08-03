@@ -1,36 +1,96 @@
 package dev.sreedaya.sprintforge.common;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.http.*;
+import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
-import org.springframework.web.bind.annotation.*;
-import java.time.Instant;
-import java.util.*;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
-    public record Problem(Instant timestamp, int status, String error, String message, String path, Map<String,String> fields) {}
+    public record Problem(
+            Instant timestamp,
+            int status,
+            String error,
+            String message,
+            String path,
+            Map<String, String> fields) {}
 
     @ExceptionHandler(NotFoundException.class)
-    ResponseEntity<Problem> notFound(NotFoundException ex, HttpServletRequest req) { return problem(HttpStatus.NOT_FOUND, ex.getMessage(), req, null); }
-    @ExceptionHandler({ConflictException.class, org.springframework.orm.ObjectOptimisticLockingFailureException.class})
-    ResponseEntity<Problem> conflict(Exception ex, HttpServletRequest req) { return problem(HttpStatus.CONFLICT, ex.getMessage(), req, null); }
-    @ExceptionHandler(AccessDeniedException.class)
-    ResponseEntity<Problem> forbidden(Exception ex, HttpServletRequest req) { return problem(HttpStatus.FORBIDDEN, "You cannot access this resource", req, null); }
-    @ExceptionHandler(BadCredentialsException.class)
-    ResponseEntity<Problem> unauthorized(Exception ex, HttpServletRequest req) { return problem(HttpStatus.UNAUTHORIZED, "Invalid email or password", req, null); }
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    ResponseEntity<Problem> validation(MethodArgumentNotValidException ex, HttpServletRequest req) {
-        var fields = new LinkedHashMap<String,String>();
-        ex.getBindingResult().getFieldErrors().forEach(e -> fields.putIfAbsent(e.getField(), e.getDefaultMessage()));
-        return problem(HttpStatus.BAD_REQUEST, "Request validation failed", req, fields);
-    }
-    private ResponseEntity<Problem> problem(HttpStatus status, String message, HttpServletRequest req, Map<String,String> fields) {
-        return ResponseEntity.status(status).body(new Problem(Instant.now(), status.value(), status.getReasonPhrase(), message, req.getRequestURI(), fields));
+    ResponseEntity<Problem> notFound(
+            NotFoundException exception, HttpServletRequest request) {
+        return problem(HttpStatus.NOT_FOUND, exception.getMessage(), request, null);
     }
 
-    public static class NotFoundException extends RuntimeException { public NotFoundException(String m) { super(m); } }
-    public static class ConflictException extends RuntimeException { public ConflictException(String m) { super(m); } }
+    @ExceptionHandler({
+        ConflictException.class,
+        org.springframework.orm.ObjectOptimisticLockingFailureException.class
+    })
+    ResponseEntity<Problem> conflict(Exception exception, HttpServletRequest request) {
+        return problem(HttpStatus.CONFLICT, exception.getMessage(), request, null);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<Problem> forbidden(Exception exception, HttpServletRequest request) {
+        return problem(
+                HttpStatus.FORBIDDEN,
+                "You cannot access this resource",
+                request,
+                null);
+    }
+
+    @ExceptionHandler(BadCredentialsException.class)
+    ResponseEntity<Problem> unauthorized(Exception exception, HttpServletRequest request) {
+        return problem(
+                HttpStatus.UNAUTHORIZED,
+                "Invalid email or password",
+                request,
+                null);
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    ResponseEntity<Problem> validation(
+            MethodArgumentNotValidException exception, HttpServletRequest request) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        exception.getBindingResult().getFieldErrors().forEach(error ->
+                fields.putIfAbsent(error.getField(), error.getDefaultMessage()));
+        return problem(
+                HttpStatus.BAD_REQUEST,
+                "Request validation failed",
+                request,
+                fields);
+    }
+
+    private ResponseEntity<Problem> problem(
+            HttpStatus status,
+            String message,
+            HttpServletRequest request,
+            Map<String, String> fields) {
+        Problem body = new Problem(
+                Instant.now(),
+                status.value(),
+                status.getReasonPhrase(),
+                message,
+                request.getRequestURI(),
+                fields);
+        return ResponseEntity.status(status).body(body);
+    }
+
+    public static class NotFoundException extends RuntimeException {
+        public NotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    public static class ConflictException extends RuntimeException {
+        public ConflictException(String message) {
+            super(message);
+        }
+    }
 }

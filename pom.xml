@@ -12,7 +12,7 @@
 	<artifactId>sprintforge</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name>SprintForge</name>
-	<description>Production-ready project management REST API</description>
+	<description>Project management and Kanban work-item REST API</description>
 	<url/>
 	<licenses>
 		<license/>

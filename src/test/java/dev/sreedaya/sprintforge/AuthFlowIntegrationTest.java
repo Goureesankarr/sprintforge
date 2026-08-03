@@ -16,9 +16,9 @@ class AuthFlowIntegrationTest {
 
     @Test void registersAndReturnsJwt() throws Exception {
         mvc.perform(post("/api/v1/auth/register").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"email\":\"dev@example.com\",\"password\":\"StrongPass123!\",\"displayName\":\"Demo Developer\"}"))
+                .content("{\"email\":\"alex@example.org\",\"password\":\"StrongPass123!\",\"displayName\":\"Alex Morgan\"}"))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.token").isNotEmpty())
-                .andExpect(jsonPath("$.user.email").value("dev@example.com"));
+                .andExpect(jsonPath("$.user.email").value("alex@example.org"));
     }
 
     @Test void rejectsInvalidRegistration() throws Exception {

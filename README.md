@@ -2,72 +2,86 @@
 
 ![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue) ![CI](https://github.com/Goureesankarr/sprintforge/actions/workflows/ci.yml/badge.svg)
 
-A production-minded project management REST API built to demonstrate backend engineering practices beyond basic CRUD: secure authentication, project-level authorization, transactional workflows, database migrations, optimistic locking, audit trails, search, pagination, observability, documentation, testing, and containerized delivery.
+SprintForge is a REST API for managing projects and Kanban-style work items. A project owner can invite registered users, members can coordinate work through a shared board, and significant changes are recorded in an audit trail.
 
-## Highlights
+## Features
 
-- Stateless JWT authentication with BCrypt password hashing
-- Project ownership and member-based access control
-- Kanban work items with status, priority, assignment, due dates, search, filters, and pagination
-- PostgreSQL schema managed by versioned Flyway migrations
-- Optimistic locking to prevent silent concurrent-update loss
-- Immutable audit events for important project and work-item actions
-- Board summary endpoint for lightweight reporting
-- Standardized RFC-style API errors and field-level validation details
-- OpenAPI/Swagger UI, health checks, metrics, Docker Compose, and GitHub Actions CI
+- Email/password registration and stateless JWT authentication
+- Project ownership and member-based authorization
+- Work-item assignment, priorities, due dates, and Kanban statuses
+- Text search, filtering, sorting, and pagination
+- Per-project board summaries
+- Optimistic locking for concurrent updates
+- Audit events for project and work-item changes
+- Flyway-managed PostgreSQL schema
+- OpenAPI documentation and operational health endpoints
 
 ## Architecture
 
+SprintForge is a modular monolith organized around business capabilities:
+
 ```text
-HTTP / JSON
-   │
-Controllers + request validation
-   │
-Transactional domain workflows ─── JWT authorization
-   │
-Spring Data JPA repositories
-   │
-PostgreSQL + Flyway migrations
+Client
+  │ HTTPS + JWT
+  ▼
+REST controllers ── validation and access checks
+  │
+  ├── auth       registration and token issuance
+  ├── project    ownership and membership
+  ├── task       work-item lifecycle and board queries
+  ├── audit      append-only change history
+  └── user       identities and persistence
+  │
+Spring Data JPA
+  │
+PostgreSQL ── schema versioned by Flyway
 ```
 
-The code is organized by business capability (`auth`, `project`, `task`, `audit`, and `user`) so related HTTP, domain, and persistence code stays easy to navigate.
+Requests are authenticated by Spring Security before reaching the controllers. Project-scoped operations verify membership in the repository layer and return `404` for inaccessible resources, avoiding disclosure of project identifiers. State changes and their audit events share a transaction.
 
-## Run locally
+See [Architecture](docs/architecture.md) for the component boundaries, data model, security flow, and design decisions.
 
-The fastest route starts both PostgreSQL and the API:
+## Running locally
+
+### Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-Then open:
+### Maven
 
-- Swagger UI: `http://localhost:8080/docs`
-- Health check: `http://localhost:8080/actuator/health`
-- OpenAPI JSON: `http://localhost:8080/v3/api-docs`
-
-Or start only PostgreSQL and run the application with Java 21:
+Start PostgreSQL, then run the service with Java 21:
 
 ```bash
 docker compose up -d postgres
 ./mvnw spring-boot:run
 ```
 
-## API tour
+Local endpoints:
 
-Register and copy the returned token:
+- Swagger UI: `http://localhost:8080/docs`
+- OpenAPI document: `http://localhost:8080/v3/api-docs`
+- Health check: `http://localhost:8080/actuator/health`
+
+Configuration is supplied through environment variables. Copy `.env.example` when setting up a local environment and use a randomly generated `JWT_SECRET` outside local development.
+
+## Example workflow
+
+Register a user:
 
 ```bash
 curl -s http://localhost:8080/api/v1/auth/register \
   -H 'Content-Type: application/json' \
-  -d '{"email":"dev@example.com","password":"StrongPass123!","displayName":"Demo Developer"}'
+  -d '{"email":"alex@example.org","password":"StrongPass123!","displayName":"Alex Morgan"}'
 ```
 
-Create a project:
+Use the returned token to create a project:
 
 ```bash
 curl -s http://localhost:8080/api/v1/projects \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
   -d '{"name":"Platform Launch","key":"PLAT","description":"Launch planning and delivery"}'
 ```
 
@@ -75,30 +89,26 @@ Create and query work items:
 
 ```bash
 curl -s "http://localhost:8080/api/v1/projects/$PROJECT_ID/work-items" \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"title":"Design database indexes","priority":"HIGH","status":"IN_PROGRESS"}'
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Review database indexes","priority":"HIGH","status":"IN_PROGRESS"}'
 
 curl -s "http://localhost:8080/api/v1/projects/$PROJECT_ID/work-items?status=IN_PROGRESS&priority=HIGH&page=0&size=20" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-## Quality checks
+## Tests
 
 ```bash
 ./mvnw clean verify
 ```
 
-Integration tests use an isolated H2 database in PostgreSQL compatibility mode. CI runs the full Maven verification lifecycle on every pull request and push to `main`.
+Integration tests cover registration, validation, authenticated project creation, work-item workflows, board summaries, and cross-user authorization. CI runs the Maven verification lifecycle for pushes and pull requests.
 
-## Resume-ready description
-
-**SprintForge — Project Management REST API**
-Built a secure, containerized project-management backend with Java 21, Spring Boot, Spring Security, JPA, PostgreSQL, and Flyway. Implemented JWT authentication, project-level authorization, paginated work-item search, optimistic concurrency control, audit logging, OpenAPI documentation, integration tests, health/metrics endpoints, and GitHub Actions CI.
-
-## Tech stack
+## Technology
 
 Java 21 · Spring Boot 4 · Spring Security · Spring Data JPA · PostgreSQL · Flyway · OpenAPI · Maven · JUnit · Docker · GitHub Actions
 
 ## License
 
-MIT
+Licensed under the [MIT License](LICENSE).
