@@ -1,7 +1,6 @@
 package dev.sreedaya.sprintforge.audit;
 
-import dev.sreedaya.sprintforge.common.ApiExceptionHandler.NotFoundException;
-import dev.sreedaya.sprintforge.project.ProjectRepository;
+import dev.sreedaya.sprintforge.project.ProjectAccessService;
 import jakarta.transaction.Transactional;
 import java.time.Instant;
 import java.util.UUID;
@@ -19,12 +18,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/projects/{projectId}/audit-events")
 public class AuditEventController {
     private final AuditEventRepository auditEvents;
-    private final ProjectRepository projects;
+    private final ProjectAccessService access;
 
     public AuditEventController(
-            AuditEventRepository auditEvents, ProjectRepository projects) {
+            AuditEventRepository auditEvents, ProjectAccessService access) {
         this.auditEvents = auditEvents;
-        this.projects = projects;
+        this.access = access;
     }
 
     public record AuditEventView(
@@ -51,10 +50,7 @@ public class AuditEventController {
             @PathVariable UUID projectId,
             @PageableDefault(size = 30) Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        UUID userId = UUID.fromString(jwt.getSubject());
-        if (!projects.canAccess(projectId, userId)) {
-            throw new NotFoundException("Project not found");
-        }
+        access.requireMember(projectId, jwt);
         return auditEvents.findByProjectIdOrderByOccurredAtDesc(projectId, pageable)
                 .map(AuditEventView::from);
     }

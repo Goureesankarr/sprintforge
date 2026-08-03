@@ -14,8 +14,9 @@ import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -30,17 +31,22 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/projects")
 public class ProjectController {
+    private static final Logger log = LoggerFactory.getLogger(ProjectController.class);
+
     private final ProjectRepository projects;
     private final UserRepository users;
     private final AuditEventRepository auditEvents;
+    private final ProjectAccessService access;
 
     public ProjectController(
             ProjectRepository projects,
             UserRepository users,
-            AuditEventRepository auditEvents) {
+            AuditEventRepository auditEvents,
+            ProjectAccessService access) {
         this.projects = projects;
         this.users = users;
         this.auditEvents = auditEvents;
+        this.access = access;
     }
 
     public record CreateProject(
@@ -85,7 +91,7 @@ public class ProjectController {
             throw new ConflictException("Project key already exists");
         }
 
-        User owner = currentUser(jwt);
+        User owner = access.currentUser(jwt);
         Instant now = Instant.now();
         Project project = new Project();
         project.setId(UUID.randomUUID());
@@ -100,13 +106,14 @@ public class ProjectController {
 
         projects.save(project);
         recordAuditEvent(project, owner, "PROJECT_CREATED", project.getId());
+        log.info("Project created: projectId={}, ownerId={}", project.getId(), owner.getId());
         return ProjectView.from(project);
     }
 
     @GetMapping
     @Transactional
     List<ProjectView> list(@AuthenticationPrincipal Jwt jwt) {
-        return projects.findAccessible(userId(jwt)).stream()
+        return projects.findAccessible(access.userId(jwt)).stream()
                 .map(ProjectView::from)
                 .toList();
     }
@@ -114,8 +121,7 @@ public class ProjectController {
     @GetMapping("/{id}")
     @Transactional
     ProjectView get(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
-        requireAccess(id, userId(jwt));
-        return ProjectView.from(findProject(id));
+        return ProjectView.from(access.requireMember(id, jwt));
     }
 
     @PostMapping("/{id}/members/{email}")
@@ -124,57 +130,29 @@ public class ProjectController {
             @PathVariable UUID id,
             @PathVariable String email,
             @AuthenticationPrincipal Jwt jwt) {
-        User actor = currentUser(jwt);
-        requireAccess(id, actor.getId());
-        Project project = findProject(id);
-        requireOwner(project, actor);
+        User actor = access.currentUser(jwt);
+        Project project = access.requireOwner(id, jwt);
 
         User member = users.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new NotFoundException("User not found"));
         project.getMembers().add(member);
         project.setUpdatedAt(Instant.now());
         recordAuditEvent(project, actor, "MEMBER_ADDED", member.getId());
+        log.info("Project member added: projectId={}, memberId={}", id, member.getId());
         return ProjectView.from(project);
     }
 
     @PatchMapping("/{id}/archive")
     @Transactional
     ProjectView archive(@PathVariable UUID id, @AuthenticationPrincipal Jwt jwt) {
-        User actor = currentUser(jwt);
-        requireAccess(id, actor.getId());
-        Project project = findProject(id);
-        requireOwner(project, actor);
+        User actor = access.currentUser(jwt);
+        Project project = access.requireOwner(id, jwt);
 
         project.setStatus(Project.Status.ARCHIVED);
         project.setUpdatedAt(Instant.now());
         recordAuditEvent(project, actor, "PROJECT_ARCHIVED", project.getId());
+        log.info("Project archived: projectId={}, actorId={}", id, actor.getId());
         return ProjectView.from(project);
-    }
-
-    private void requireAccess(UUID projectId, UUID userId) {
-        if (!projects.canAccess(projectId, userId)) {
-            throw new NotFoundException("Project not found");
-        }
-    }
-
-    private void requireOwner(Project project, User actor) {
-        if (!project.getOwner().getId().equals(actor.getId())) {
-            throw new AccessDeniedException("Only the project owner can perform this action");
-        }
-    }
-
-    private Project findProject(UUID id) {
-        return projects.findById(id)
-                .orElseThrow(() -> new NotFoundException("Project not found"));
-    }
-
-    private User currentUser(Jwt jwt) {
-        return users.findById(userId(jwt))
-                .orElseThrow(() -> new NotFoundException("User not found"));
-    }
-
-    private UUID userId(Jwt jwt) {
-        return UUID.fromString(jwt.getSubject());
     }
 
     private void recordAuditEvent(

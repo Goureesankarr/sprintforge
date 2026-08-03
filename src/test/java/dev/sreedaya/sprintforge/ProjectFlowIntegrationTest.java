@@ -27,6 +27,7 @@ class ProjectFlowIntegrationTest {
     void createsProjectWorkItemAndBoardSummary() throws Exception {
         Session owner = register("owner@example.org", "Taylor Reed");
         String projectId = createProject(owner.token(), "Delivery Board", "DLVRY");
+        String sprintId = createSprint(owner.token(), projectId);
 
         mvc.perform(post("/api/v1/projects/{projectId}/work-items", projectId)
                         .header("Authorization", bearer(owner.token()))
@@ -36,12 +37,14 @@ class ProjectFlowIntegrationTest {
                                   "title": "Review release checklist",
                                   "status": "IN_PROGRESS",
                                   "priority": "HIGH",
-                                  "assigneeId": "%s"
+                                  "assigneeId": "%s",
+                                  "sprintId": "%s"
                                 }
-                                """.formatted(owner.userId())))
+                                """.formatted(owner.userId(), sprintId)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.title").value("Review release checklist"))
-                .andExpect(jsonPath("$.assigneeId").value(owner.userId()));
+                .andExpect(jsonPath("$.assigneeId").value(owner.userId()))
+                .andExpect(jsonPath("$.sprintId").value(sprintId));
 
         mvc.perform(get("/api/v1/projects/{projectId}/work-items/summary", projectId)
                         .header("Authorization", bearer(owner.token())))
@@ -59,7 +62,7 @@ class ProjectFlowIntegrationTest {
         mvc.perform(get("/api/v1/projects/{projectId}/audit-events", projectId)
                         .header("Authorization", bearer(owner.token())))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content.length()").value(2))
+                .andExpect(jsonPath("$.content.length()").value(3))
                 .andExpect(jsonPath("$.content[0].action").value("WORK_ITEM_CREATED"));
     }
 
@@ -123,6 +126,24 @@ class ProjectFlowIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(request))
                 .andExpect(status().isCreated())
+                .andReturn();
+        return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+    }
+
+    private String createSprint(String token, String projectId) throws Exception {
+        MvcResult result = mvc.perform(post("/api/v1/projects/{projectId}/sprints", projectId)
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "name": "Release 1",
+                                  "goal": "Prepare the first stable release",
+                                  "startDate": "2026-08-03",
+                                  "endDate": "2026-08-17"
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("PLANNED"))
                 .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
     }

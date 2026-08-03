@@ -28,6 +28,12 @@ public class ApiExceptionHandler {
         return problem(HttpStatus.NOT_FOUND, exception.getMessage(), request, null);
     }
 
+    @ExceptionHandler(BadRequestException.class)
+    ResponseEntity<Problem> badRequest(
+            BadRequestException exception, HttpServletRequest request) {
+        return problem(HttpStatus.BAD_REQUEST, exception.getMessage(), request, null);
+    }
+
     @ExceptionHandler({
         ConflictException.class,
         org.springframework.orm.ObjectOptimisticLockingFailureException.class
@@ -84,6 +90,12 @@ public class ApiExceptionHandler {
 
     public static class NotFoundException extends RuntimeException {
         public NotFoundException(String message) {
+            super(message);
+        }
+    }
+
+    public static class BadRequestException extends RuntimeException {
+        public BadRequestException(String message) {
             super(message);
         }
     }

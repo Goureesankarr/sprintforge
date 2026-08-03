@@ -1,8 +1,6 @@
-package dev.sreedaya.sprintforge.task;
+package dev.sreedaya.sprintforge.sprint;
 
 import dev.sreedaya.sprintforge.project.Project;
-import dev.sreedaya.sprintforge.sprint.Sprint;
-import dev.sreedaya.sprintforge.user.User;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -21,11 +19,11 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 @Entity
-@Table(name = "work_items")
+@Table(name = "sprints")
 @Getter
 @Setter
 @NoArgsConstructor
-public class WorkItem {
+public class Sprint {
     @Id
     private UUID id;
 
@@ -33,29 +31,20 @@ public class WorkItem {
     @JoinColumn(name = "project_id")
     private Project project;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "sprint_id")
-    private Sprint sprint;
-
     @Column(nullable = false)
-    private String title;
+    private String name;
 
-    private String description;
+    private String goal;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private Status status;
 
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private Priority priority;
+    @Column(name = "start_date", nullable = false)
+    private LocalDate startDate;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "assignee_id")
-    private User assignee;
-
-    @Column(name = "due_date")
-    private LocalDate dueDate;
+    @Column(name = "end_date", nullable = false)
+    private LocalDate endDate;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -67,17 +56,9 @@ public class WorkItem {
     private long version;
 
     public enum Status {
-        BACKLOG,
-        TODO,
-        IN_PROGRESS,
-        IN_REVIEW,
-        DONE
-    }
-
-    public enum Priority {
-        LOW,
-        MEDIUM,
-        HIGH,
-        CRITICAL
+        PLANNED,
+        ACTIVE,
+        COMPLETED,
+        CANCELLED
     }
 }

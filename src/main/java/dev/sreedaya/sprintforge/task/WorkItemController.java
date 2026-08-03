@@ -4,7 +4,10 @@ import dev.sreedaya.sprintforge.audit.AuditEvent;
 import dev.sreedaya.sprintforge.audit.AuditEventRepository;
 import dev.sreedaya.sprintforge.common.ApiExceptionHandler.NotFoundException;
 import dev.sreedaya.sprintforge.project.Project;
+import dev.sreedaya.sprintforge.project.ProjectAccessService;
 import dev.sreedaya.sprintforge.project.ProjectRepository;
+import dev.sreedaya.sprintforge.sprint.Sprint;
+import dev.sreedaya.sprintforge.sprint.SprintService;
 import dev.sreedaya.sprintforge.user.User;
 import dev.sreedaya.sprintforge.user.UserRepository;
 import jakarta.transaction.Transactional;
@@ -17,6 +20,8 @@ import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -38,20 +43,31 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/v1/projects/{projectId}/work-items")
 public class WorkItemController {
+    private static final Logger log = LoggerFactory.getLogger(WorkItemController.class);
+
     private final WorkItemRepository workItems;
     private final ProjectRepository projects;
     private final UserRepository users;
     private final AuditEventRepository auditEvents;
+    private final SprintService sprintService;
+    private final WorkItemWorkflow workflow;
+    private final ProjectAccessService access;
 
     public WorkItemController(
             WorkItemRepository workItems,
             ProjectRepository projects,
             UserRepository users,
-            AuditEventRepository auditEvents) {
+            AuditEventRepository auditEvents,
+            SprintService sprintService,
+            WorkItemWorkflow workflow,
+            ProjectAccessService access) {
         this.workItems = workItems;
         this.projects = projects;
         this.users = users;
         this.auditEvents = auditEvents;
+        this.sprintService = sprintService;
+        this.workflow = workflow;
+        this.access = access;
     }
 
     public record WorkItemRequest(
@@ -60,11 +76,13 @@ public class WorkItemController {
             WorkItem.Status status,
             @NotNull WorkItem.Priority priority,
             UUID assigneeId,
+            UUID sprintId,
             LocalDate dueDate) {}
 
     public record WorkItemView(
             UUID id,
             UUID projectId,
+            UUID sprintId,
             String title,
             String description,
             String status,
@@ -81,6 +99,7 @@ public class WorkItemController {
             return new WorkItemView(
                     workItem.getId(),
                     workItem.getProject().getId(),
+                    workItem.getSprint() == null ? null : workItem.getSprint().getId(),
                     workItem.getTitle(),
                     workItem.getDescription(),
                     workItem.getStatus().name(),
@@ -102,7 +121,7 @@ public class WorkItemController {
             @PathVariable UUID projectId,
             @Valid @RequestBody WorkItemRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        Project project = accessibleProject(projectId, jwt);
+        Project project = access.requireMember(projectId, jwt);
         Instant now = Instant.now();
         WorkItem workItem = new WorkItem();
         workItem.setId(UUID.randomUUID());
@@ -112,7 +131,8 @@ public class WorkItemController {
         workItem.setUpdatedAt(now);
 
         workItems.save(workItem);
-        recordAuditEvent(project, currentUser(jwt), "WORK_ITEM_CREATED", workItem.getId());
+        recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_CREATED", workItem.getId());
+        log.info("Work item created: workItemId={}, projectId={}", workItem.getId(), projectId);
         return WorkItemView.from(workItem);
     }
 
@@ -128,7 +148,7 @@ public class WorkItemController {
                     sort = "updatedAt",
                     direction = Sort.Direction.DESC) Pageable pageable,
             @AuthenticationPrincipal Jwt jwt) {
-        accessibleProject(projectId, jwt);
+        access.requireMember(projectId, jwt);
         String query = q == null || q.isBlank() ? null : q.trim();
         return workItems.search(projectId, status, priority, query, pageable)
                 .map(WorkItemView::from);
@@ -141,11 +161,20 @@ public class WorkItemController {
             @PathVariable UUID id,
             @Valid @RequestBody WorkItemRequest request,
             @AuthenticationPrincipal Jwt jwt) {
-        Project project = accessibleProject(projectId, jwt);
+        Project project = access.requireMember(projectId, jwt);
         WorkItem workItem = findWorkItem(id, projectId);
+        workflow.validateTransition(workItem.getStatus(), requestedStatus(request));
+        WorkItem.Status previousStatus = workItem.getStatus();
         applyRequest(workItem, request, projectId);
         workItem.setUpdatedAt(Instant.now());
-        recordAuditEvent(project, currentUser(jwt), "WORK_ITEM_UPDATED", workItem.getId());
+        recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_UPDATED", workItem.getId());
+        if (previousStatus != workItem.getStatus()) {
+            log.info(
+                    "Work item status changed: workItemId={}, from={}, to={}",
+                    id,
+                    previousStatus,
+                    workItem.getStatus());
+        }
         return WorkItemView.from(workItem);
     }
 
@@ -156,10 +185,10 @@ public class WorkItemController {
             @PathVariable UUID projectId,
             @PathVariable UUID id,
             @AuthenticationPrincipal Jwt jwt) {
-        Project project = accessibleProject(projectId, jwt);
+        Project project = access.requireMember(projectId, jwt);
         WorkItem workItem = findWorkItem(id, projectId);
         workItems.delete(workItem);
-        recordAuditEvent(project, currentUser(jwt), "WORK_ITEM_DELETED", workItem.getId());
+        recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_DELETED", workItem.getId());
     }
 
     @GetMapping("/summary")
@@ -167,7 +196,7 @@ public class WorkItemController {
     BoardSummary summary(
             @PathVariable UUID projectId,
             @AuthenticationPrincipal Jwt jwt) {
-        accessibleProject(projectId, jwt);
+        access.requireMember(projectId, jwt);
         Map<String, Long> counts = new LinkedHashMap<>();
         for (WorkItem.Status status : WorkItem.Status.values()) {
             counts.put(status.name(), 0L);
@@ -187,7 +216,16 @@ public class WorkItemController {
                 : request.status());
         workItem.setPriority(request.priority());
         workItem.setAssignee(resolveAssignee(projectId, request.assigneeId()));
+        workItem.setSprint(resolveSprint(projectId, request.sprintId()));
         workItem.setDueDate(request.dueDate());
+    }
+
+    private WorkItem.Status requestedStatus(WorkItemRequest request) {
+        return request.status() == null ? WorkItem.Status.BACKLOG : request.status();
+    }
+
+    private Sprint resolveSprint(UUID projectId, UUID sprintId) {
+        return sprintId == null ? null : sprintService.find(projectId, sprintId);
     }
 
     private User resolveAssignee(UUID projectId, UUID assigneeId) {
@@ -201,14 +239,6 @@ public class WorkItemController {
                 .orElseThrow(() -> new NotFoundException("Assignee not found"));
     }
 
-    private Project accessibleProject(UUID projectId, Jwt jwt) {
-        if (!projects.canAccess(projectId, userId(jwt))) {
-            throw new NotFoundException("Project not found");
-        }
-        return projects.findById(projectId)
-                .orElseThrow(() -> new NotFoundException("Project not found"));
-    }
-
     private WorkItem findWorkItem(UUID id, UUID projectId) {
         WorkItem workItem = workItems.findById(id)
                 .orElseThrow(() -> new NotFoundException("Work item not found"));
@@ -216,15 +246,6 @@ public class WorkItemController {
             throw new NotFoundException("Work item not found");
         }
         return workItem;
-    }
-
-    private User currentUser(Jwt jwt) {
-        return users.findById(userId(jwt))
-                .orElseThrow(() -> new NotFoundException("User not found"));
-    }
-
-    private UUID userId(Jwt jwt) {
-        return UUID.fromString(jwt.getSubject());
     }
 
     private void recordAuditEvent(
