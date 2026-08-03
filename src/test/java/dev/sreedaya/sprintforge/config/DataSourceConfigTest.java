@@ -10,7 +10,14 @@ class DataSourceConfigTest {
     void convertsPlatformPostgresUrlToJdbcUrl() {
         assertThat(DataSourceConfig.normalizePostgresUrl(
                         "postgresql://user:password@database:5432/sprintforge"))
-                .isEqualTo("jdbc:postgresql://user:password@database:5432/sprintforge");
+                .isEqualTo("jdbc:postgresql://database:5432/sprintforge");
+    }
+
+    @Test
+    void preservesDatabaseUrlQueryOptions() {
+        assertThat(DataSourceConfig.normalizePostgresUrl(
+                        "postgres://user:password@database/sprintforge?sslmode=require"))
+                .isEqualTo("jdbc:postgresql://database/sprintforge?sslmode=require");
     }
 
     @Test

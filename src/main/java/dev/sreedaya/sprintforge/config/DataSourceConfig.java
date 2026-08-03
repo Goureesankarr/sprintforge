@@ -1,5 +1,6 @@
 package dev.sreedaya.sprintforge.config;
 
+import java.net.URI;
 import javax.sql.DataSource;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;
@@ -21,7 +22,17 @@ public class DataSourceConfig {
             return url;
         }
         if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
-            return "jdbc:" + url;
+            URI uri = URI.create(url);
+            StringBuilder jdbcUrl = new StringBuilder("jdbc:postgresql://")
+                    .append(uri.getHost());
+            if (uri.getPort() != -1) {
+                jdbcUrl.append(':').append(uri.getPort());
+            }
+            jdbcUrl.append(uri.getRawPath());
+            if (uri.getRawQuery() != null) {
+                jdbcUrl.append('?').append(uri.getRawQuery());
+            }
+            return jdbcUrl.toString();
         }
         return url;
     }
