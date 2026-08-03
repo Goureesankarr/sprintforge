@@ -1,6 +1,6 @@
 # SprintForge
 
-![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue) ![CI](https://github.com/sreedayags/sprintforge/actions/workflows/ci.yml/badge.svg)
+![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue) ![CI](https://github.com/Goureesankarr/sprintforge/actions/workflows/ci.yml/badge.svg)
 
 A production-minded project management REST API built to demonstrate backend engineering practices beyond basic CRUD: secure authentication, project-level authorization, transactional workflows, database migrations, optimistic locking, audit trails, search, pagination, observability, documentation, testing, and containerized delivery.
 
