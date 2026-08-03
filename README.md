@@ -1,6 +1,6 @@
 # SprintForge
 
-![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue) ![CI](https://github.com/Goureesankarr/sprintforge/actions/workflows/ci.yml/badge.svg)
+![Java](https://img.shields.io/badge/Java-21-orange) ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0-brightgreen) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-17-blue) ![CI](https://github.com/Goureesankarr/sprintforge/actions/workflows/ci.yml/badge.svg) [![Live API](https://img.shields.io/badge/API-live-46E3B7)](https://sprintforge-api.onrender.com/actuator/health)
 
 SprintForge is a project-delivery REST API for teams that need a lightweight place to plan sprints, assign work, and track progress without losing change history. It models the authorization and consistency concerns that sit behind a collaborative board rather than treating the board as a collection of unrelated CRUD screens.
 
@@ -166,11 +166,23 @@ The suite contains unit tests for access rules and workflow transitions plus int
 
 ## Deployment
 
-[`render.yaml`](render.yaml) defines a Docker web service, a PostgreSQL 17 database, generated JWT secret, health check, and deploy-after-CI policy. A public instance has not been provisioned yet, so the repository does not claim a live endpoint.
+The production API runs on Render with a managed PostgreSQL 17 database:
+
+- API: [https://sprintforge-api.onrender.com](https://sprintforge-api.onrender.com)
+- Swagger UI: [https://sprintforge-api.onrender.com/docs](https://sprintforge-api.onrender.com/docs)
+- Health: [https://sprintforge-api.onrender.com/actuator/health](https://sprintforge-api.onrender.com/actuator/health)
+
+[`render.yaml`](render.yaml) defines the Docker web service, PostgreSQL database, generated JWT secret, health check, and deploy-after-CI policy. The free web instance spins down when idle, so its first request after inactivity can take about a minute.
 
 ## Screenshots
 
-Runtime screenshots will be captured from the public environment after its first successful deployment. Until then, the CI badge above and the reproducible Docker workflow are the verifiable execution evidence.
+### Live OpenAPI documentation
+
+![SprintForge live Swagger UI](docs/images/swagger-ui.jpg)
+
+### Project and sprint endpoints
+
+![SprintForge project and sprint endpoints](docs/images/swagger-modules.jpg)
 
 ## Design decisions
 
