@@ -2,17 +2,14 @@
 
 ## System context
 
-SprintForge is an HTTP service used by browser, mobile, or command-line clients. It owns user credentials, projects, memberships, work items, and their audit history. PostgreSQL is the only required backing service.
+SprintForge is a stateless HTTP service used by browser, mobile, or command-line clients. It owns credentials, projects, memberships, sprints, work items, and audit history. PostgreSQL is its only required backing service.
 
-```text
-┌──────────────┐       HTTPS / JSON       ┌──────────────────┐
-│ API clients  │ ───────────────────────▶ │   SprintForge    │
-└──────────────┘        Bearer JWT         │  Spring Boot API │
-                                           └────────┬─────────┘
-                                                    │ JDBC
-                                           ┌────────▼─────────┐
-                                           │    PostgreSQL    │
-                                           └──────────────────┘
+```mermaid
+flowchart LR
+    C[API clients] -->|HTTPS / JSON| API[Spring Boot API]
+    C -->|Bearer JWT| API
+    API -->|JDBC| DB[(PostgreSQL)]
+    API --> OBS[Health and metrics]
 ```
 
 ## Module boundaries
@@ -20,86 +17,152 @@ SprintForge is an HTTP service used by browser, mobile, or command-line clients.
 | Module | Responsibility | Owns |
 | --- | --- | --- |
 | `auth` | Registration, credential verification, JWT issuance | Authentication endpoints |
-| `user` | User identity persistence | `app_users` |
-| `project` | Project lifecycle, ownership, membership, access checks | `projects`, `project_members` |
-| `task` | Work-item lifecycle, search, pagination, board summaries | `work_items` |
+| `user` | User identity and credential persistence | `app_users` |
+| `project` | Project lifecycle, ownership, membership, access policy | `projects`, `project_members` |
+| `sprint` | Sprint planning, lifecycle rules, operational counters | `sprints` |
+| `task` | Assignment, guarded workflow, search, pagination, summaries | `work_items` |
 | `audit` | Append-only records of significant state changes | `audit_events` |
-| `config` | Security and OpenAPI wiring | Application configuration |
+| `config` | Security, OpenAPI, and datasource wiring | Application configuration |
 | `common` | Consistent HTTP error responses | Shared error contract |
 
-The modules run in one process and one database. This keeps transactions straightforward while leaving clear boundaries that can be extracted if workload or team ownership later requires it.
+All modules run in one process and database. Capability boundaries keep dependencies visible and allow a module to be extracted later if scale or team ownership requires it.
 
 ## Request and security flow
 
-```text
-Register/Login
-    │
-    ├── BCrypt verifies or stores the password hash
-    └── HS256 signs a time-limited JWT
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Security as Spring Security
+    participant API as Controller / Service
+    participant DB as PostgreSQL
 
-Authenticated request
-    │
-    ├── Spring Security validates signature and expiry
-    ├── JWT subject resolves to the application user ID
-    ├── Project repository verifies owner/member access
-    └── Controller performs the state change and appends an audit event
+    Client->>Security: Request + Bearer JWT
+    Security->>Security: Validate HS256 signature and expiry
+    Security->>API: Authenticated user subject
+    API->>DB: Load project through membership policy
+    DB-->>API: Authorized aggregate or no result
+    API->>DB: Commit state change + audit event
+    API-->>Client: DTO + explicit HTTP status
 ```
 
-Project-scoped endpoints intentionally return `404 Not Found` when the caller is not a member. This prevents an authenticated user from using response differences to discover valid project or work-item identifiers. Owner-only operations, such as archiving a project or adding a member, return `403 Forbidden` to an existing member without owner privileges.
+Registration stores only a BCrypt hash. Login verifies the submitted password and returns a time-limited JWT. Spring Security authenticates every protected route before the controller runs. `ProjectAccessService` then applies resource-level owner/member rules.
+
+Project-scoped endpoints intentionally return `404 Not Found` when the caller is not a member, preventing identifier discovery. An existing member receives `403 Forbidden` when attempting an owner-only operation such as adding members or archiving the project.
 
 ## Data model
 
-```text
-app_users 1 ──────── * projects (owner)
-    │                     │
-    │ *                   │ 1
-    └── project_members ──┘
-                          │
-                          ├── * work_items
-                          └── * audit_events
+```mermaid
+erDiagram
+    APP_USERS {
+        uuid id PK
+        varchar email UK
+        varchar password_hash
+        varchar role
+    }
+    PROJECTS {
+        uuid id PK
+        uuid owner_id FK
+        varchar project_key UK
+        varchar status
+        bigint version
+    }
+    PROJECT_MEMBERS {
+        uuid project_id PK,FK
+        uuid user_id PK,FK
+    }
+    SPRINTS {
+        uuid id PK
+        uuid project_id FK
+        varchar status
+        date start_date
+        date end_date
+        bigint version
+    }
+    WORK_ITEMS {
+        uuid id PK
+        uuid project_id FK
+        uuid sprint_id FK
+        uuid assignee_id FK
+        varchar status
+        varchar priority
+        date due_date
+        bigint version
+    }
+    AUDIT_EVENTS {
+        uuid id PK
+        uuid project_id FK
+        uuid actor_id FK
+        varchar action
+        timestamptz occurred_at
+    }
+
+    APP_USERS ||--o{ PROJECTS : owns
+    APP_USERS ||--o{ PROJECT_MEMBERS : joins
+    PROJECTS ||--o{ PROJECT_MEMBERS : includes
+    PROJECTS ||--o{ SPRINTS : plans
+    PROJECTS ||--o{ WORK_ITEMS : contains
+    SPRINTS o|--o{ WORK_ITEMS : groups
+    APP_USERS o|--o{ WORK_ITEMS : assigned
+    PROJECTS ||--o{ AUDIT_EVENTS : records
+    APP_USERS ||--o{ AUDIT_EVENTS : performs
 ```
 
-- UUIDs are generated by the application so entities have stable identifiers before persistence.
+- Application-generated UUIDs give entities stable identifiers before persistence.
 - Foreign keys enforce ownership and project boundaries.
 - Composite membership keys prevent duplicate memberships.
-- Indexes support board filtering, assignee queries, and reverse-chronological audit access.
-- `@Version` columns on projects and work items detect conflicting concurrent writes.
+- Sprint dates have a database check constraint in addition to API validation.
+- Indexes cover work-item status, assignee, sprint status, and audit timeline queries.
+- `@Version` columns on projects, sprints, and work items detect conflicting writes.
+
+## Lifecycle rules
+
+Work items follow explicit transitions:
+
+```text
+BACKLOG -> TODO -> IN_PROGRESS -> IN_REVIEW -> DONE
+             ^          │             │         │
+             └──────────┘             └─────────┘
+```
+
+The service also permits moving `TODO` back to `BACKLOG`. These rules are isolated in `WorkItemWorkflow` and unit tested. Sprints move from `PLANNED` to `ACTIVE`, then to `COMPLETED`; planned or active sprints may be cancelled. Invalid transitions return `409 Conflict`.
 
 ## Transactions and consistency
 
-Mutating endpoints run inside database transactions. The domain change and its audit event either commit together or roll back together. Flyway owns schema evolution; Hibernate validates the migrated schema at startup and does not modify production tables.
+Mutating endpoints run inside database transactions. A domain change and its audit event commit or roll back together. Flyway owns schema evolution; Hibernate uses `validate` at startup and never creates or updates production tables. Assignment is accepted only when the assignee is already a project member, and a work item can reference only a sprint from the same project.
+
+## Error contract
+
+`ApiExceptionHandler` converts validation and domain failures into a stable JSON shape containing timestamp, status, error, message, path, and field errors where relevant. The API uses `400` for malformed input, `401` for authentication failures, `403` for known-but-forbidden actions, `404` for absent or intentionally hidden resources, and `409` for uniqueness and lifecycle conflicts.
 
 ## Operational model
 
 - `/actuator/health` supports container and platform health checks.
-- Metrics are exposed through Spring Boot Actuator.
-- The application is stateless and can be horizontally replicated behind a load balancer.
+- `/actuator/metrics` exposes JVM, HTTP, datasource, and custom application meters.
+- `/actuator/prometheus` supplies scrape-ready monitoring data.
+- Sprint creation and status changes increment domain counters.
+- Structured SLF4J events record significant actions using entity IDs rather than credentials or tokens.
+- The application is stateless and can be replicated behind a load balancer.
 - Runtime secrets and database credentials are injected through environment variables.
-- Docker Compose provides a reproducible local environment; GitHub Actions runs tests on each change.
+- Docker Compose provides a reproducible local environment; CI verifies tests before building the production image.
 
 ## Design decisions and tradeoffs
 
 ### Modular monolith
 
-A single deployable avoids distributed transactions and operational overhead at the current scale. Capability-based packages keep dependencies visible and create a path toward later service extraction.
+A single deployable avoids distributed transactions and operational overhead at the current scale. Capability packages retain a clear path to service extraction.
 
 ### Symmetric JWT signing
 
-HS256 keeps local deployment simple. A multi-service or third-party integration scenario should move signing to an identity provider and use asymmetric keys with rotation.
+HS256 keeps local and single-service deployment simple. A multi-service system should delegate identity to an OpenID Connect provider and use asymmetric keys with rotation.
 
-### Repository-level access queries
+### Repository-backed resource authorization
 
-Authorization checks are expressed close to data access, limiting accidental loading of inaccessible projects. The tradeoff is that authorization is currently coupled to the relational membership model.
+Authorization is resolved against relational ownership and membership data before project-scoped resources are returned. This limits accidental data exposure at the cost of coupling the current policy to the database model.
 
 ### Synchronous audit writes
 
-Audit records participate in the same transaction as state changes, providing strong consistency. If audit volume becomes significant, an outbox table and asynchronous publisher can preserve reliability while moving downstream processing off the request path.
+Audit records share the state-change transaction and therefore cannot be silently lost after a successful response. If events need external consumers, a transactional outbox can preserve that guarantee while moving delivery off the request path.
 
-## Future work
+### Fast integration database
 
-- Refresh-token rotation and email verification
-- Project roles beyond owner/member
-- Comments and work-item history endpoints
-- PostgreSQL-backed integration tests with Testcontainers
-- Rate limiting and structured request correlation IDs
-- Asymmetric JWT signing or external OpenID Connect provider
+Integration tests use H2 in PostgreSQL compatibility mode for quick CI feedback. Flyway migrations and production execution target PostgreSQL 17. Testcontainers against real PostgreSQL is deliberately listed as future work rather than claimed as current coverage.

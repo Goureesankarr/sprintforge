@@ -16,3 +16,10 @@ jobs:
           java-version: "21"
           cache: maven
       - run: ./mvnw --batch-mode verify
+  container:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --tag sprintforge:${{ github.sha }} .

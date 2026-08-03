@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: sprintforge-api
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /actuator/health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sprintforge-db
+          property: connectionString
+      - key: DATABASE_USERNAME
+        fromDatabase:
+          name: sprintforge-db
+          property: user
+      - key: DATABASE_PASSWORD
+        fromDatabase:
+          name: sprintforge-db
+          property: password
+      - key: JWT_SECRET
+        generateValue: true
+
+databases:
+  - name: sprintforge-db
+    plan: free
+    region: singapore
+    postgresMajorVersion: "17"
+    databaseName: sprintforge
+    user: sprintforge
