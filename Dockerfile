@@ -10,4 +10,4 @@ USER sprintforge
 WORKDIR /app
 COPY --from=build /workspace/target/*.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java","-XX:MaxRAMPercentage=75","-jar","app.jar"]
+ENTRYPOINT ["java","-XX:MaxRAMPercentage=75","-XX:TieredStopAtLevel=1","-jar","app.jar"]
