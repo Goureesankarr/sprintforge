@@ -13,7 +13,8 @@ class SprintServiceTest {
             mock(SprintRepository.class),
             mock(dev.sreedaya.sprintforge.project.ProjectAccessService.class),
             mock(dev.sreedaya.sprintforge.audit.AuditEventRepository.class),
-            new SimpleMeterRegistry());
+            new SimpleMeterRegistry(),
+            mock(dev.sreedaya.sprintforge.realtime.ProjectEventPublisher.class));
 
     @Test
     void allowsPlannedSprintToStart() {

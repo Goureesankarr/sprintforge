@@ -7,21 +7,14 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
-import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -35,18 +28,15 @@ public class AuthController {
 
     private final UserRepository users;
     private final PasswordEncoder passwords;
-    private final JwtEncoder jwtEncoder;
-    private final Duration tokenTtl;
+    private final TokenService tokens;
 
     public AuthController(
             UserRepository users,
             PasswordEncoder passwords,
-            JwtEncoder jwtEncoder,
-            @Value("${app.jwt.ttl}") Duration tokenTtl) {
+            TokenService tokens) {
         this.users = users;
         this.passwords = passwords;
-        this.jwtEncoder = jwtEncoder;
-        this.tokenTtl = tokenTtl;
+        this.tokens = tokens;
     }
 
     public record RegisterRequest(
@@ -60,9 +50,12 @@ public class AuthController {
 
     public record AuthResponse(
             String token,
+            String refreshToken,
             String tokenType,
             long expiresIn,
             UserView user) {}
+
+    public record RefreshRequest(@NotBlank String refreshToken) {}
 
     public record UserView(
             UUID id,
@@ -100,25 +93,35 @@ public class AuthController {
         return issueToken(user);
     }
 
+    @PostMapping("/refresh")
+    AuthResponse refresh(@Valid @RequestBody RefreshRequest request) {
+        TokenService.RotatedToken rotated = tokens.rotate(request.refreshToken());
+        return response(
+                rotated.user(),
+                rotated.accessToken(),
+                rotated.refreshToken(),
+                rotated.expiresIn());
+    }
+
+    @PostMapping("/logout")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    void logout(@Valid @RequestBody RefreshRequest request) {
+        tokens.revoke(request.refreshToken());
+    }
+
     private AuthResponse issueToken(User user) {
-        Instant now = Instant.now();
-        JwtClaimsSet claims = JwtClaimsSet.builder()
-                .issuer("sprintforge")
-                .issuedAt(now)
-                .expiresAt(now.plus(tokenTtl))
-                .subject(user.getId().toString())
-                .claim("email", user.getEmail())
-                .claim("scope", user.getRole().name())
-                .build();
-        JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
-        String token = jwtEncoder.encode(JwtEncoderParameters.from(header, claims))
-                .getTokenValue();
+        TokenService.TokenPair pair = tokens.issue(user);
+        return response(user, pair.accessToken(), pair.refreshToken(), pair.expiresIn());
+    }
+
+    private AuthResponse response(
+            User user, String accessToken, String refreshToken, long expiresIn) {
         UserView view = new UserView(
                 user.getId(),
                 user.getEmail(),
                 user.getDisplayName(),
                 user.getRole().name());
-        return new AuthResponse(token, "Bearer", tokenTtl.toSeconds(), view);
+        return new AuthResponse(accessToken, refreshToken, "Bearer", expiresIn, view);
     }
 
     private String normalizeEmail(String email) {

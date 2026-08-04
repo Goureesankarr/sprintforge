@@ -39,7 +39,7 @@ class ProjectAccessServiceTest {
         project.setId(projectId);
         when(jwt.getSubject()).thenReturn(userId.toString());
         when(projects.canAccess(projectId, userId)).thenReturn(true);
-        when(projects.findById(projectId)).thenReturn(Optional.of(project));
+        when(projects.findActiveById(projectId)).thenReturn(Optional.of(project));
 
         assertEquals(project, access.requireMember(projectId, jwt));
     }
@@ -65,7 +65,7 @@ class ProjectAccessServiceTest {
         project.setOwner(owner);
         when(jwt.getSubject()).thenReturn(memberId.toString());
         when(projects.canAccess(projectId, memberId)).thenReturn(true);
-        when(projects.findById(projectId)).thenReturn(Optional.of(project));
+        when(projects.findActiveById(projectId)).thenReturn(Optional.of(project));
 
         assertThrows(AccessDeniedException.class, () -> access.requireOwner(projectId, jwt));
     }

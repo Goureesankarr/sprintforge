@@ -12,7 +12,8 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
     @Query("""
             select distinct p from Project p
             left join p.members m
-            where p.owner.id = :userId or m.id = :userId
+            where p.deletedAt is null
+              and (p.owner.id = :userId or m.id = :userId)
             order by p.updatedAt desc
             """)
     List<Project> findAccessible(@Param("userId") UUID userId);
@@ -21,9 +22,13 @@ public interface ProjectRepository extends JpaRepository<Project, UUID> {
             select count(p) > 0 from Project p
             left join p.members m
             where p.id = :projectId
+              and p.deletedAt is null
               and (p.owner.id = :userId or m.id = :userId)
             """)
     boolean canAccess(
             @Param("projectId") UUID projectId,
             @Param("userId") UUID userId);
+
+    @Query("select p from Project p where p.id = :id and p.deletedAt is null")
+    java.util.Optional<Project> findActiveById(@Param("id") UUID id);
 }

@@ -39,6 +39,7 @@ public class User {
 
     public enum Role {
         USER,
+        MANAGER,
         ADMIN
     }
 }

@@ -6,6 +6,7 @@ import dev.sreedaya.sprintforge.common.ApiExceptionHandler.NotFoundException;
 import dev.sreedaya.sprintforge.project.Project;
 import dev.sreedaya.sprintforge.project.ProjectAccessService;
 import dev.sreedaya.sprintforge.project.ProjectRepository;
+import dev.sreedaya.sprintforge.realtime.ProjectEventPublisher;
 import dev.sreedaya.sprintforge.sprint.Sprint;
 import dev.sreedaya.sprintforge.sprint.SprintService;
 import dev.sreedaya.sprintforge.user.User;
@@ -17,11 +18,11 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -51,7 +52,9 @@ public class WorkItemController {
     private final AuditEventRepository auditEvents;
     private final SprintService sprintService;
     private final WorkItemWorkflow workflow;
+    private final WorkItemSummaryService summaries;
     private final ProjectAccessService access;
+    private final ProjectEventPublisher events;
 
     public WorkItemController(
             WorkItemRepository workItems,
@@ -60,14 +63,18 @@ public class WorkItemController {
             AuditEventRepository auditEvents,
             SprintService sprintService,
             WorkItemWorkflow workflow,
-            ProjectAccessService access) {
+            WorkItemSummaryService summaries,
+            ProjectAccessService access,
+            ProjectEventPublisher events) {
         this.workItems = workItems;
         this.projects = projects;
         this.users = users;
         this.auditEvents = auditEvents;
         this.sprintService = sprintService;
         this.workflow = workflow;
+        this.summaries = summaries;
         this.access = access;
+        this.events = events;
     }
 
     public record WorkItemRequest(
@@ -112,11 +119,22 @@ public class WorkItemController {
         }
     }
 
-    public record BoardSummary(Map<String, Long> counts, long total) {}
+    public record BoardSummary(Map<String, Long> counts, long total)
+            implements java.io.Serializable {
+        public BoardSummary {
+            counts = Map.copyOf(counts);
+        }
+
+        @Override
+        public Map<String, Long> counts() {
+            return Map.copyOf(counts);
+        }
+    }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @Transactional
+    @CacheEvict(cacheNames = "boardSummaries", key = "#projectId")
     WorkItemView create(
             @PathVariable UUID projectId,
             @Valid @RequestBody WorkItemRequest request,
@@ -132,6 +150,7 @@ public class WorkItemController {
 
         workItems.save(workItem);
         recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_CREATED", workItem.getId());
+        events.publish(projectId, "WORK_ITEM_CREATED", "WORK_ITEM", workItem.getId());
         log.info("Work item created: workItemId={}, projectId={}", workItem.getId(), projectId);
         return WorkItemView.from(workItem);
     }
@@ -156,6 +175,7 @@ public class WorkItemController {
 
     @PutMapping("/{id}")
     @Transactional
+    @CacheEvict(cacheNames = "boardSummaries", key = "#projectId")
     WorkItemView update(
             @PathVariable UUID projectId,
             @PathVariable UUID id,
@@ -168,6 +188,7 @@ public class WorkItemController {
         applyRequest(workItem, request, projectId);
         workItem.setUpdatedAt(Instant.now());
         recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_UPDATED", workItem.getId());
+        events.publish(projectId, "WORK_ITEM_UPDATED", "WORK_ITEM", workItem.getId());
         if (previousStatus != workItem.getStatus()) {
             log.info(
                     "Work item status changed: workItemId={}, from={}, to={}",
@@ -181,14 +202,17 @@ public class WorkItemController {
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @Transactional
+    @CacheEvict(cacheNames = "boardSummaries", key = "#projectId")
     void delete(
             @PathVariable UUID projectId,
             @PathVariable UUID id,
             @AuthenticationPrincipal Jwt jwt) {
         Project project = access.requireMember(projectId, jwt);
         WorkItem workItem = findWorkItem(id, projectId);
-        workItems.delete(workItem);
+        workItem.setDeletedAt(Instant.now());
+        workItem.setUpdatedAt(Instant.now());
         recordAuditEvent(project, access.currentUser(jwt), "WORK_ITEM_DELETED", workItem.getId());
+        events.publish(projectId, "WORK_ITEM_DELETED", "WORK_ITEM", workItem.getId());
     }
 
     @GetMapping("/summary")
@@ -197,14 +221,7 @@ public class WorkItemController {
             @PathVariable UUID projectId,
             @AuthenticationPrincipal Jwt jwt) {
         access.requireMember(projectId, jwt);
-        Map<String, Long> counts = new LinkedHashMap<>();
-        for (WorkItem.Status status : WorkItem.Status.values()) {
-            counts.put(status.name(), 0L);
-        }
-        workItems.countByStatus(projectId).forEach(row ->
-                counts.put(((WorkItem.Status) row[0]).name(), (Long) row[1]));
-        long total = counts.values().stream().mapToLong(Long::longValue).sum();
-        return new BoardSummary(counts, total);
+        return summaries.summarize(projectId);
     }
 
     private void applyRequest(
@@ -240,11 +257,8 @@ public class WorkItemController {
     }
 
     private WorkItem findWorkItem(UUID id, UUID projectId) {
-        WorkItem workItem = workItems.findById(id)
+        WorkItem workItem = workItems.findActiveByIdAndProjectId(id, projectId)
                 .orElseThrow(() -> new NotFoundException("Work item not found"));
-        if (!workItem.getProject().getId().equals(projectId)) {
-            throw new NotFoundException("Work item not found");
-        }
         return workItem;
     }
 

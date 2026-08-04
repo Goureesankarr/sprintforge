@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FindBugsFilter>
+    <!-- JPA associations are managed mutable references by design. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+        <Or>
+            <Class name="dev.sreedaya.sprintforge.attachment.Attachment"/>
+            <Class name="dev.sreedaya.sprintforge.audit.AuditEvent"/>
+            <Class name="dev.sreedaya.sprintforge.auth.RefreshToken"/>
+            <Class name="dev.sreedaya.sprintforge.project.Project"/>
+            <Class name="dev.sreedaya.sprintforge.sprint.Sprint"/>
+            <Class name="dev.sreedaya.sprintforge.task.WorkItem"/>
+        </Or>
+    </Match>
+    <!-- Constructor-injected framework collaborators are intentionally retained. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP2"/>
+        <Or>
+            <Class name="dev.sreedaya.sprintforge.auth.TokenService"/>
+            <Class name="dev.sreedaya.sprintforge.config.WebSocketConfig"/>
+            <Class name="dev.sreedaya.sprintforge.realtime.ProjectEventPublisher"/>
+        </Or>
+    </Match>
+    <!-- The rotated token is an internal transaction result, never serialized directly. -->
+    <Match>
+        <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2"/>
+        <Class name="dev.sreedaya.sprintforge.auth.TokenService$RotatedToken"/>
+    </Match>
+</FindBugsFilter>

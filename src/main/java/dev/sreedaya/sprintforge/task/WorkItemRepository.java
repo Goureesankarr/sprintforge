@@ -12,6 +12,7 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
     @Query("""
             select w from WorkItem w
             where w.project.id = :projectId
+              and w.deletedAt is null
               and (:status is null or w.status = :status)
               and (:priority is null or w.priority = :priority)
               and (:query is null or lower(w.title) like lower(concat('%', :query, '%')))
@@ -26,7 +27,12 @@ public interface WorkItemRepository extends JpaRepository<WorkItem, UUID> {
     @Query("""
             select w.status, count(w) from WorkItem w
             where w.project.id = :projectId
+              and w.deletedAt is null
             group by w.status
             """)
     List<Object[]> countByStatus(@Param("projectId") UUID projectId);
+
+    @Query("select w from WorkItem w where w.id = :id and w.project.id = :projectId and w.deletedAt is null")
+    java.util.Optional<WorkItem> findActiveByIdAndProjectId(
+            @Param("id") UUID id, @Param("projectId") UUID projectId);
 }

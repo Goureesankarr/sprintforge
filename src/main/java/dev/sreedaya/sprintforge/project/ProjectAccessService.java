@@ -23,7 +23,7 @@ public class ProjectAccessService {
         if (!projects.canAccess(projectId, userId)) {
             throw new NotFoundException("Project not found");
         }
-        return projects.findById(projectId)
+        return projects.findActiveById(projectId)
                 .orElseThrow(() -> new NotFoundException("Project not found"));
     }
 

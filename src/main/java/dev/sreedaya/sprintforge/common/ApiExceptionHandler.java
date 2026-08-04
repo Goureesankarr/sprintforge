@@ -20,7 +20,16 @@ public class ApiExceptionHandler {
             String error,
             String message,
             String path,
-            Map<String, String> fields) {}
+            Map<String, String> fields) {
+        public Problem {
+            fields = fields == null ? null : Map.copyOf(fields);
+        }
+
+        @Override
+        public Map<String, String> fields() {
+            return fields == null ? null : Map.copyOf(fields);
+        }
+    }
 
     @ExceptionHandler(NotFoundException.class)
     ResponseEntity<Problem> notFound(
@@ -32,6 +41,12 @@ public class ApiExceptionHandler {
     ResponseEntity<Problem> badRequest(
             BadRequestException exception, HttpServletRequest request) {
         return problem(HttpStatus.BAD_REQUEST, exception.getMessage(), request, null);
+    }
+
+    @ExceptionHandler(ServiceUnavailableException.class)
+    ResponseEntity<Problem> serviceUnavailable(
+            ServiceUnavailableException exception, HttpServletRequest request) {
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, exception.getMessage(), request, null);
     }
 
     @ExceptionHandler({
@@ -51,7 +66,7 @@ public class ApiExceptionHandler {
                 null);
     }
 
-    @ExceptionHandler(BadCredentialsException.class)
+    @ExceptionHandler({BadCredentialsException.class, UnauthorizedException.class})
     ResponseEntity<Problem> unauthorized(Exception exception, HttpServletRequest request) {
         return problem(
                 HttpStatus.UNAUTHORIZED,
@@ -102,6 +117,18 @@ public class ApiExceptionHandler {
 
     public static class ConflictException extends RuntimeException {
         public ConflictException(String message) {
+            super(message);
+        }
+    }
+
+    public static class UnauthorizedException extends RuntimeException {
+        public UnauthorizedException(String message) {
+            super(message);
+        }
+    }
+
+    public static class ServiceUnavailableException extends RuntimeException {
+        public ServiceUnavailableException(String message) {
             super(message);
         }
     }
