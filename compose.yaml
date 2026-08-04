@@ -17,8 +17,43 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/sprintforge
       JWT_SECRET: local-compose-secret-change-before-production-123
+      CACHE_TYPE: redis
+      SPRING_DATA_REDIS_HOST: redis
+      REDIS_HEALTH_ENABLED: "true"
+      METRICS_KEY: local-prometheus-key
     ports: ["8080:8080"]
     depends_on:
       postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["9090:9090"]
+    depends_on: [api]
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: sprintforge
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
 volumes:
   postgres-data:
+  redis-data:
+  grafana-data:

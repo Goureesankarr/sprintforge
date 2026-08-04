@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: sprintforge-api
+    metrics_path: /actuator/prometheus
+    authorization:
+      type: Metrics
+      credentials: local-prometheus-key
+    static_configs:
+      - targets: ["api:8080"]
