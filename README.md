@@ -6,17 +6,19 @@ SprintForge is a project-delivery REST API for teams that need a lightweight pla
 
 ## Features
 
-- Registration and login with BCrypt password hashing and time-limited JWTs
-- Project ownership and member-based authorization
+- Registration and login with BCrypt, short-lived JWTs, and hashed refresh-token rotation
+- Hierarchical `ADMIN > MANAGER > USER` roles plus project ownership and membership policies
 - Sprint planning with date validation and controlled status transitions
 - Work-item assignment, priorities, deadlines, and guarded workflow transitions
 - Search, status and priority filters, pagination, and sorting
-- Per-project workflow summaries and append-only audit events
+- Redis-cached board summaries, soft-deleted work items, and append-only audit events
+- Asynchronous email invitations and authenticated STOMP/WebSocket project updates
+- S3 presigned attachment uploads with file type and 25 MiB size enforcement
 - Optimistic locking for concurrent project, sprint, and work-item updates
 - PostgreSQL constraints, relationships, indexes, and versioned Flyway migrations
 - Consistent validation and centralized JSON error responses
-- Structured application logs, health probes, Actuator metrics, and Prometheus output
-- OpenAPI documentation, Dockerized execution, and GitHub Actions verification
+- Structured logs, health probes, protected Prometheus metrics, and a provisioned Grafana dashboard
+- OpenAPI, Docker, Testcontainers, JaCoCo, SpotBugs, OWASP Dependency-Check, SonarCloud, Trivy, and release automation
 
 ## Architecture
 
@@ -29,13 +31,19 @@ flowchart LR
     A --> M[Capability modules]
     M --> J[Spring Data JPA]
     J --> P[(PostgreSQL)]
+    M --> R[(Redis cache)]
+    M --> E[SMTP / WebSocket]
+    M --> S3[(S3 attachments)]
     F[Flyway migrations] --> P
     A --> O[OpenAPI / Actuator]
 ```
 
 ```text
 src/main/java/dev/sreedaya/sprintforge/
-├── auth/        registration, login, token creation
+├── auth/        registration, login, access and refresh tokens
+├── attachment/  S3 presigned upload lifecycle
+├── notification asynchronous email delivery
+├── realtime/    project-scoped WebSocket events
 ├── user/        identities and credential persistence
 ├── project/     ownership, membership, access policies
 ├── sprint/      sprint lifecycle and metrics
@@ -53,12 +61,13 @@ The detailed [architecture document](docs/architecture.md) describes boundaries,
 | --- | --- |
 | Runtime | Java 21, Spring Boot 4 |
 | API | Spring MVC, Bean Validation, springdoc-openapi |
-| Security | Spring Security, OAuth2 Resource Server, HS256 JWT, BCrypt |
+| Security | Spring Security, role hierarchy, HS256 JWT, refresh rotation, BCrypt |
 | Persistence | Spring Data JPA, Hibernate, PostgreSQL 17, Flyway |
-| Reliability | SLF4J, centralized exception handling, optimistic locking |
-| Operations | Actuator, Micrometer, Prometheus, Docker |
-| Verification | JUnit 5, MockMvc, Mockito, H2 test database, Maven |
-| Automation | GitHub Actions, Render Blueprint |
+| Reliability | Redis, SLF4J, centralized errors, soft deletion, optimistic locking |
+| Integrations | SMTP notifications, STOMP/WebSocket, AWS S3 presigned uploads |
+| Operations | Actuator, Micrometer, Prometheus, Grafana, Docker Compose |
+| Verification | JUnit 5, MockMvc, Mockito, H2, PostgreSQL Testcontainers, JaCoCo |
+| Automation | GitHub Actions, SpotBugs, OWASP, SonarCloud, Trivy, Dependabot, Render |
 
 ## Database schema
 
@@ -72,6 +81,9 @@ erDiagram
     APP_USERS o|--o{ WORK_ITEMS : assigned_to
     PROJECTS ||--o{ AUDIT_EVENTS : records
     APP_USERS ||--o{ AUDIT_EVENTS : performs
+    APP_USERS ||--o{ REFRESH_TOKENS : owns
+    PROJECTS ||--o{ ATTACHMENTS : stores
+    WORK_ITEMS o|--o{ ATTACHMENTS : includes
 ```
 
 Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/db/migration). Foreign keys enforce ownership and project boundaries; unique constraints prevent duplicate memberships, project keys, and sprint names. Composite indexes support board filters, sprint queries, assignee lookups, and reverse-chronological audit access.
@@ -82,6 +94,9 @@ Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/
 | --- | --- | --- | --- |
 | `POST` | `/api/v1/auth/register` | Public | Register and receive a JWT |
 | `POST` | `/api/v1/auth/login` | Public | Authenticate and receive a JWT |
+| `POST` | `/api/v1/auth/refresh` | Public | Rotate a refresh token and issue a new token pair |
+| `POST` | `/api/v1/auth/logout` | Public | Revoke a refresh token |
+| `PATCH` | `/api/v1/admin/users/{id}/role` | Admin | Change a user's global role |
 | `POST` | `/api/v1/projects` | Authenticated | Create a project |
 | `GET` | `/api/v1/projects` | Authenticated | List accessible projects |
 | `GET` | `/api/v1/projects/{id}` | Member | Read project details |
@@ -93,9 +108,12 @@ Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/
 | `POST` | `/api/v1/projects/{id}/work-items` | Member | Create and optionally assign work |
 | `GET` | `/api/v1/projects/{id}/work-items` | Member | Search and page through work |
 | `PUT` | `/api/v1/projects/{id}/work-items/{workItemId}` | Member | Update a work item |
-| `DELETE` | `/api/v1/projects/{id}/work-items/{workItemId}` | Member | Delete a work item |
+| `DELETE` | `/api/v1/projects/{id}/work-items/{workItemId}` | Member | Soft-delete a work item |
 | `GET` | `/api/v1/projects/{id}/work-items/summary` | Member | Count work by status |
 | `GET` | `/api/v1/projects/{id}/audit-events` | Member | Read project audit history |
+| `POST` | `/api/v1/projects/{id}/attachments/upload-url` | Member | Create an S3 upload ticket |
+| `PATCH` | `/api/v1/projects/{id}/attachments/{attachmentId}/complete` | Member | Mark an upload available |
+| `GET` | `/api/v1/projects/{id}/attachments` | Member | Page through attachment metadata |
 | `GET` | `/actuator/health` | Public | Liveness and readiness status |
 
 Swagger UI is available at `/docs`; the OpenAPI document is served at `/v3/api-docs`. List endpoints accept Spring pagination parameters such as `page`, `size`, and `sort`. Work-item queries also accept `status`, `priority`, and `q`.
@@ -110,14 +128,16 @@ cd sprintforge
 docker compose up --build
 ```
 
-PostgreSQL is checked for readiness before the API starts. Flyway applies both migrations during startup, and Hibernate validates the resulting schema.
+PostgreSQL and Redis are checked for readiness before the API starts. Flyway applies migrations during startup, and Hibernate validates the resulting schema. Prometheus and Grafana are provisioned automatically.
 
 Local URLs:
 
 - Swagger UI: `http://localhost:8080/docs`
 - OpenAPI: `http://localhost:8080/v3/api-docs`
 - Health: `http://localhost:8080/actuator/health`
-- Prometheus metrics: `http://localhost:8080/actuator/prometheus` (Bearer JWT required)
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (`admin` / `sprintforge`, local use only)
+- WebSocket/STOMP handshake: `ws://localhost:8080/ws` with an `Authorization` native header
 
 ## Run with Maven
 
@@ -138,6 +158,11 @@ set -a && source .env && set +a
 | `DATABASE_USERNAME` | Yes | Database user |
 | `DATABASE_PASSWORD` | Yes | Database password |
 | `JWT_SECRET` | Yes | Random signing secret of at least 32 characters |
+| `REFRESH_TOKEN_TTL` | No | Refresh lifetime as an ISO-8601 duration, defaults to 30 days |
+| `METRICS_KEY` | Yes | Key supplied to the protected Prometheus endpoint |
+| `CACHE_TYPE` | No | Use `redis` with `SPRING_DATA_REDIS_HOST`, otherwise `simple` |
+| `EMAIL_NOTIFICATIONS_ENABLED` | No | Enables SMTP invitations when mail settings are present |
+| `S3_ENABLED` | No | Enables presigned uploads; requires bucket, region, and AWS credentials |
 | `PORT` | No | HTTP port, defaults to `8080` |
 
 Development defaults exist only to make local startup predictable. Never reuse them in an internet-facing environment.
@@ -162,7 +187,9 @@ curl -s http://localhost:8080/api/v1/projects \
 ./mvnw clean verify
 ```
 
-The suite contains unit tests for access rules and workflow transitions plus integration tests that exercise registration, JWT-protected routes, validation failures, project creation, sprint planning, task assignment, filtering, summaries, audit history, and cross-user authorization. GitHub Actions runs the complete Maven verification lifecycle and builds the production Docker image on every change to `main` and on pull requests.
+The suite combines fast H2 tests with a Docker-aware PostgreSQL Testcontainers migration test. It covers access rules, workflows, token rotation, protected routes, validation, project and sprint flows, assignment, filtering, cached summaries, audit history, and cross-user authorization. `verify` also writes the JaCoCo HTML/XML report under `target/site/jacoco`.
+
+CI runs the tests and SpotBugs, builds the production image, and blocks high or critical Trivy findings. Separate workflows run OWASP Dependency-Check, opt into SonarCloud when repository credentials are configured, open Dependabot updates, and create GitHub Releases from `v*` tags.
 
 ## Deployment
 
@@ -189,17 +216,18 @@ The production API runs on Render with a managed PostgreSQL 17 database:
 - A modular monolith keeps cross-entity writes transactional without introducing distributed-system overhead.
 - Project-scoped resources return `404` to non-members to avoid leaking valid identifiers; known members receive `403` for owner-only actions.
 - Workflow transitions live in domain services instead of controllers, making the rules independently testable.
-- Audit events commit in the same transaction as state changes. An outbox is the intended evolution if external event delivery is introduced.
+- Refresh tokens are random opaque values; only SHA-256 digests are stored, and rotation revokes each used token under a database lock.
+- S3 uploads go directly from the client to object storage through short-lived presigned URLs, keeping file bytes outside the API process.
+- Email and WebSocket delivery are secondary effects; database state remains authoritative if an external delivery channel is unavailable.
 - Symmetric JWT signing is appropriate for one service; an external identity provider and asymmetric key rotation are the next step for a multi-service environment.
 
 ## Future improvements
 
-- PostgreSQL Testcontainers tests in addition to fast H2 integration tests
-- Refresh-token rotation, email verification, and account recovery
-- Project-specific roles beyond owner and member
-- Comments, attachments, and work-item history views
-- Correlation IDs, rate limiting, dashboards, and alert rules
-- Transactional outbox for downstream notifications
+- Transactional outbox and retry workers for guaranteed notifications
+- S3 completion verification, malware scanning, and attachment retention policies
+- Per-project roles in addition to the global role hierarchy
+- Email verification, account recovery, comments, and work-item history views
+- Correlation IDs, rate limiting, alert rules, and distributed tracing
 
 ## License
 
