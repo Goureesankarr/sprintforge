@@ -4,6 +4,7 @@ COPY . .
 RUN ./mvnw -B -DskipTests package
 
 FROM eclipse-temurin:21-jre-alpine
+RUN apk upgrade --no-cache
 RUN addgroup -S sprintforge && adduser -S sprintforge -G sprintforge
 USER sprintforge
 WORKDIR /app
