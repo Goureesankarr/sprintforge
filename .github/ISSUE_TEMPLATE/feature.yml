@@ -1,0 +1,22 @@
+name: Feature proposal
+description: Propose a scoped SprintForge capability.
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operational problem should this solve?
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List observable outcomes, API behavior, and test expectations.
+    validations: { required: true }
+  - type: textarea
+    id: design
+    attributes:
+      label: Design notes
+      description: Mention schema, security, compatibility, and observability impacts.
