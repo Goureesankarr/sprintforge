@@ -10,6 +10,7 @@ SprintForge is a project-delivery REST API for teams that need a lightweight pla
 - Hierarchical `ADMIN > MANAGER > USER` roles plus project ownership and membership policies
 - Sprint planning with date validation and controlled status transitions
 - Work-item assignment, priorities, deadlines, and guarded workflow transitions
+- Paginated work-item discussions with author editing and owner moderation
 - Search, status and priority filters, pagination, and sorting
 - Redis-cached board summaries, soft-deleted work items, and append-only audit events
 - Asynchronous email invitations and authenticated STOMP/WebSocket project updates
@@ -42,6 +43,7 @@ flowchart LR
 src/main/java/dev/sreedaya/sprintforge/
 ├── auth/        registration, login, access and refresh tokens
 ├── attachment/  S3 presigned upload lifecycle
+├── comment/     work-item discussions and moderation
 ├── notification asynchronous email delivery
 ├── realtime/    project-scoped WebSocket events
 ├── user/        identities and credential persistence
@@ -79,6 +81,8 @@ erDiagram
     PROJECTS ||--o{ WORK_ITEMS : contains
     SPRINTS o|--o{ WORK_ITEMS : groups
     APP_USERS o|--o{ WORK_ITEMS : assigned_to
+    WORK_ITEMS ||--o{ WORK_ITEM_COMMENTS : discusses
+    APP_USERS ||--o{ WORK_ITEM_COMMENTS : authors
     PROJECTS ||--o{ AUDIT_EVENTS : records
     APP_USERS ||--o{ AUDIT_EVENTS : performs
     APP_USERS ||--o{ REFRESH_TOKENS : owns
@@ -86,7 +90,7 @@ erDiagram
     WORK_ITEMS o|--o{ ATTACHMENTS : includes
 ```
 
-Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/db/migration). Foreign keys enforce ownership and project boundaries; unique constraints prevent duplicate memberships, project keys, and sprint names. Composite indexes support board filters, sprint queries, assignee lookups, and reverse-chronological audit access.
+Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/db/migration). Foreign keys enforce ownership and project boundaries; unique constraints prevent duplicate memberships, project keys, and sprint names. Composite and partial indexes support board filters, sprint queries, assignee lookups, active comment timelines, and reverse-chronological audit access.
 
 ## API
 
@@ -110,6 +114,10 @@ Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/
 | `PUT` | `/api/v1/projects/{id}/work-items/{workItemId}` | Member | Update a work item |
 | `DELETE` | `/api/v1/projects/{id}/work-items/{workItemId}` | Member | Soft-delete a work item |
 | `GET` | `/api/v1/projects/{id}/work-items/summary` | Member | Count work by status |
+| `POST` | `/api/v1/projects/{id}/work-items/{workItemId}/comments` | Member | Add a discussion comment |
+| `GET` | `/api/v1/projects/{id}/work-items/{workItemId}/comments` | Member | Read the paginated discussion |
+| `PATCH` | `/api/v1/projects/{id}/work-items/{workItemId}/comments/{commentId}` | Author | Edit a comment |
+| `DELETE` | `/api/v1/projects/{id}/work-items/{workItemId}/comments/{commentId}` | Author or owner | Soft-delete a comment |
 | `GET` | `/api/v1/projects/{id}/audit-events` | Member | Read project audit history |
 | `POST` | `/api/v1/projects/{id}/attachments/upload-url` | Member | Create an S3 upload ticket |
 | `PATCH` | `/api/v1/projects/{id}/attachments/{attachmentId}/complete` | Member | Mark an upload available |
@@ -187,7 +195,7 @@ curl -s http://localhost:8080/api/v1/projects \
 ./mvnw clean verify
 ```
 
-The suite combines fast H2 tests with a Docker-aware PostgreSQL Testcontainers migration test. It covers access rules, workflows, token rotation, protected routes, validation, project and sprint flows, assignment, filtering, cached summaries, audit history, and cross-user authorization. `verify` also writes the JaCoCo HTML/XML report under `target/site/jacoco`.
+The suite combines fast H2 tests with a Docker-aware PostgreSQL Testcontainers migration test. It covers access rules, workflows, token rotation, protected routes, validation, project and sprint flows, assignment, filtering, cached summaries, audited work-item discussions, owner moderation, and cross-user authorization. `verify` also writes the JaCoCo HTML/XML report under `target/site/jacoco`.
 
 CI runs the tests and SpotBugs, builds the production image, and blocks high or critical Trivy findings. Separate workflows run OWASP Dependency-Check, opt into SonarCloud when repository credentials are configured, open Dependabot updates, and create GitHub Releases from `v*` tags.
 
@@ -226,7 +234,7 @@ The production API runs on Render with a managed PostgreSQL 17 database:
 - Transactional outbox and retry workers for guaranteed notifications
 - S3 completion verification, malware scanning, and attachment retention policies
 - Per-project roles in addition to the global role hierarchy
-- Email verification, account recovery, comments, and work-item history views
+- Email verification, account recovery, comment mentions, and work-item history views
 - Correlation IDs, rate limiting, alert rules, and distributed tracing
 
 ## License

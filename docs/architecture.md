@@ -2,7 +2,7 @@
 
 ## System context
 
-SprintForge is a stateless HTTP and STOMP service used by browser, mobile, or command-line clients. It owns credentials, projects, memberships, sprints, work items, attachment metadata, and audit history. PostgreSQL is required; Redis, SMTP, and S3 are independently configurable production integrations.
+SprintForge is a stateless HTTP and STOMP service used by browser, mobile, or command-line clients. It owns credentials, projects, memberships, sprints, work items, discussions, attachment metadata, and audit history. PostgreSQL is required; Redis, SMTP, and S3 are independently configurable production integrations.
 
 ```mermaid
 flowchart LR
@@ -24,6 +24,7 @@ flowchart LR
 | `project` | Project lifecycle, ownership, membership, access policy | `projects`, `project_members` |
 | `sprint` | Sprint planning, lifecycle rules, operational counters | `sprints` |
 | `task` | Assignment, guarded workflow, search, pagination, summaries | `work_items` |
+| `comment` | Work-item discussion, author editing, owner moderation | `work_item_comments` |
 | `audit` | Append-only records of significant state changes | `audit_events` |
 | `attachment` | Attachment metadata and S3 presigned upload tickets | `attachments` |
 | `notification` | Asynchronous project invitation delivery | SMTP integration |
@@ -94,6 +95,14 @@ erDiagram
         date due_date
         bigint version
     }
+    WORK_ITEM_COMMENTS {
+        uuid id PK
+        uuid work_item_id FK
+        uuid author_id FK
+        varchar body
+        timestamptz deleted_at
+        bigint version
+    }
     AUDIT_EVENTS {
         uuid id PK
         uuid project_id FK
@@ -123,6 +132,8 @@ erDiagram
     PROJECTS ||--o{ WORK_ITEMS : contains
     SPRINTS o|--o{ WORK_ITEMS : groups
     APP_USERS o|--o{ WORK_ITEMS : assigned
+    WORK_ITEMS ||--o{ WORK_ITEM_COMMENTS : discusses
+    APP_USERS ||--o{ WORK_ITEM_COMMENTS : authors
     PROJECTS ||--o{ AUDIT_EVENTS : records
     APP_USERS ||--o{ AUDIT_EVENTS : performs
     APP_USERS ||--o{ REFRESH_TOKENS : owns
@@ -134,9 +145,9 @@ erDiagram
 - Foreign keys enforce ownership and project boundaries.
 - Composite membership keys prevent duplicate memberships.
 - Sprint dates have a database check constraint in addition to API validation.
-- Indexes cover work-item status, assignee, sprint status, and audit timeline queries.
-- `@Version` columns on projects, sprints, and work items detect conflicting writes.
-- Partial indexes keep active project and work-item queries efficient while retaining soft-deleted records.
+- Indexes cover work-item status, assignee, sprint status, active comment timelines, and audit timeline queries.
+- `@Version` columns on projects, sprints, work items, and comments detect conflicting writes.
+- Partial indexes keep active project, work-item, and comment queries efficient while retaining soft-deleted records.
 
 ## Lifecycle rules
 
@@ -152,7 +163,7 @@ The service also permits moving `TODO` back to `BACKLOG`. These rules are isolat
 
 ## Transactions and consistency
 
-Mutating endpoints run inside database transactions. A domain change and its audit event commit or roll back together. Board-summary cache entries are evicted after mutations. Flyway owns schema evolution; Hibernate uses `validate` at startup and never creates or updates production tables. Assignment is accepted only when the assignee is already a project member, and a work item can reference only a sprint from the same project.
+Mutating endpoints run inside database transactions. A domain change and its audit event commit or roll back together. Board-summary cache entries are evicted after mutations. Flyway owns schema evolution; Hibernate uses `validate` at startup and never creates or updates production tables. Assignment is accepted only when the assignee is already a project member, and a work item can reference only a sprint from the same project. Comments inherit the work item's project boundary: members can participate, authors can edit, and authors or project owners can soft-delete while preserving audit evidence.
 
 ## Error contract
 

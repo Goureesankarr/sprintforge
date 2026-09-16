@@ -45,9 +45,13 @@ class PostgresMigrationIntegrationTest {
         Integer attachments = jdbc.queryForObject(
                 "select count(*) from information_schema.tables where table_name = 'attachments'",
                 Integer.class);
+        Integer comments = jdbc.queryForObject(
+                "select count(*) from information_schema.tables where table_name = 'work_item_comments'",
+                Integer.class);
 
-        assertThat(migrations).isGreaterThanOrEqualTo(3);
+        assertThat(migrations).isGreaterThanOrEqualTo(4);
         assertThat(refreshTokens).isEqualTo(1);
         assertThat(attachments).isEqualTo(1);
+        assertThat(comments).isEqualTo(1);
     }
 }
