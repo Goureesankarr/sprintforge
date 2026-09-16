@@ -9,6 +9,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -98,6 +99,93 @@ class ProjectFlowIntegrationTest {
                 .andExpect(jsonPath("$.status").value("ARCHIVED"));
     }
 
+    @Test
+    void supportsAuthorizedWorkItemDiscussionsWithSoftDeletion() throws Exception {
+        Session owner = register("discussion-owner@example.org", "Avery Singh");
+        Session member = register("discussion-member@example.org", "Riley Shah");
+        Session outsider = register("discussion-outsider@example.org", "Casey Rao");
+        String projectId = createProject(owner.token(), "Incident Review", "INCDNT");
+
+        mvc.perform(post(
+                        "/api/v1/projects/{projectId}/members/{email}",
+                        projectId,
+                        "discussion-member@example.org")
+                        .header("Authorization", bearer(owner.token())))
+                .andExpect(status().isOk());
+
+        String workItemId = createWorkItem(owner.token(), projectId);
+        MvcResult created = mvc.perform(post(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments",
+                                projectId,
+                                workItemId)
+                        .header("Authorization", bearer(member.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"body": "I reproduced this in the staging environment."}
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.authorId").value(member.userId()))
+                .andExpect(jsonPath("$.authorName").value("Riley Shah"))
+                .andReturn();
+        String commentId = JsonPath.read(
+                created.getResponse().getContentAsString(), "$.id");
+
+        mvc.perform(patch(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments/{commentId}",
+                                projectId,
+                                workItemId,
+                                commentId)
+                        .header("Authorization", bearer(owner.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"body": "Owners must not rewrite another member's comment."}
+                                """))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(patch(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments/{commentId}",
+                                projectId,
+                                workItemId,
+                                commentId)
+                        .header("Authorization", bearer(member.token()))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"body": "I reproduced this in staging and attached the logs."}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.body")
+                        .value("I reproduced this in staging and attached the logs."));
+
+        mvc.perform(get(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments",
+                                projectId,
+                                workItemId)
+                        .header("Authorization", bearer(outsider.token())))
+                .andExpect(status().isNotFound());
+
+        mvc.perform(delete(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments/{commentId}",
+                                projectId,
+                                workItemId,
+                                commentId)
+                        .header("Authorization", bearer(owner.token())))
+                .andExpect(status().isNoContent());
+
+        mvc.perform(get(
+                                "/api/v1/projects/{projectId}/work-items/{workItemId}/comments",
+                                projectId,
+                                workItemId)
+                        .header("Authorization", bearer(member.token())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(0));
+
+        mvc.perform(get("/api/v1/projects/{projectId}/audit-events", projectId)
+                        .header("Authorization", bearer(owner.token())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].action").value("COMMENT_DELETED"))
+                .andExpect(jsonPath("$.content[0].entityType").value("COMMENT"));
+    }
+
     private Session register(String email, String displayName) throws Exception {
         String request = """
                 {
@@ -144,6 +232,22 @@ class ProjectFlowIntegrationTest {
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("PLANNED"))
+                .andReturn();
+        return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
+    }
+
+    private String createWorkItem(String token, String projectId) throws Exception {
+        MvcResult result = mvc.perform(post("/api/v1/projects/{projectId}/work-items", projectId)
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "title": "Investigate intermittent timeout",
+                                  "status": "IN_PROGRESS",
+                                  "priority": "HIGH"
+                                }
+                                """))
+                .andExpect(status().isCreated())
                 .andReturn();
         return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
     }
