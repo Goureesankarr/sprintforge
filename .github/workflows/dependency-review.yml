@@ -4,9 +4,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "17 3 * * 1"
-  push:
-    branches: [main]
-    paths: ["pom.xml", "owasp-suppressions.xml"]
 
 permissions:
   contents: read
@@ -14,6 +11,7 @@ permissions:
 jobs:
   owasp:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
