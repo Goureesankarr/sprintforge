@@ -13,12 +13,13 @@ SprintForge is a project-delivery REST API for teams that need a lightweight pla
 - Paginated work-item discussions with author editing and owner moderation
 - Search, status and priority filters, pagination, and sorting
 - Redis-cached board summaries, soft-deleted work items, and append-only audit events
-- Asynchronous email invitations and authenticated STOMP/WebSocket project updates
+- Transactional email outbox with idempotency, exponential retries, dead-letter handling, and authenticated STOMP/WebSocket updates
 - S3 presigned attachment uploads with file type and 25 MiB size enforcement
 - Optimistic locking for concurrent project, sprint, and work-item updates
 - PostgreSQL constraints, relationships, indexes, and versioned Flyway migrations
 - Consistent validation and centralized JSON error responses
 - Structured logs, health probes, protected Prometheus metrics, and a provisioned Grafana dashboard
+- Reproducible k6 smoke, load, and stress profiles with p50/p95/p99 reporting
 - OpenAPI, Docker, Testcontainers, JaCoCo, SpotBugs, OWASP Dependency-Check, SonarCloud, Trivy, and release automation
 
 ## Architecture
@@ -33,7 +34,9 @@ flowchart LR
     M --> J[Spring Data JPA]
     J --> P[(PostgreSQL)]
     M --> R[(Redis cache)]
-    M --> E[SMTP / WebSocket]
+    M --> Q[(Transactional outbox)]
+    Q --> E[Retry worker / SMTP]
+    M --> W[WebSocket]
     M --> S3[(S3 attachments)]
     F[Flyway migrations] --> P
     A --> O[OpenAPI / Actuator]
@@ -44,7 +47,7 @@ src/main/java/dev/sreedaya/sprintforge/
 ├── auth/        registration, login, access and refresh tokens
 ├── attachment/  S3 presigned upload lifecycle
 ├── comment/     work-item discussions and moderation
-├── notification asynchronous email delivery
+├── notification transactional outbox, retry worker, dead-letter operations
 ├── realtime/    project-scoped WebSocket events
 ├── user/        identities and credential persistence
 ├── project/     ownership, membership, access policies
@@ -65,10 +68,10 @@ The detailed [architecture document](docs/architecture.md) describes boundaries,
 | API | Spring MVC, Bean Validation, springdoc-openapi |
 | Security | Spring Security, role hierarchy, HS256 JWT, refresh rotation, BCrypt |
 | Persistence | Spring Data JPA, Hibernate, PostgreSQL 17, Flyway |
-| Reliability | Redis, SLF4J, centralized errors, soft deletion, optimistic locking |
+| Reliability | Transactional outbox, retries/DLQ, Redis, centralized errors, optimistic locking |
 | Integrations | SMTP notifications, STOMP/WebSocket, AWS S3 presigned uploads |
 | Operations | Actuator, Micrometer, Prometheus, Grafana, Docker Compose |
-| Verification | JUnit 5, MockMvc, Mockito, H2, PostgreSQL Testcontainers, JaCoCo |
+| Verification | JUnit 5, MockMvc, Mockito, H2, PostgreSQL Testcontainers, JaCoCo, k6 |
 | Automation | GitHub Actions, SpotBugs, OWASP, SonarCloud, Trivy, Dependabot, Render |
 
 ## Database schema
@@ -88,6 +91,7 @@ erDiagram
     APP_USERS ||--o{ REFRESH_TOKENS : owns
     PROJECTS ||--o{ ATTACHMENTS : stores
     WORK_ITEMS o|--o{ ATTACHMENTS : includes
+    PROJECTS ||--o{ NOTIFICATION_OUTBOX : emits
 ```
 
 Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/db/migration). Foreign keys enforce ownership and project boundaries; unique constraints prevent duplicate memberships, project keys, and sprint names. Composite and partial indexes support board filters, sprint queries, assignee lookups, active comment timelines, and reverse-chronological audit access.
@@ -101,6 +105,8 @@ Flyway migrations are in [`src/main/resources/db/migration`](src/main/resources/
 | `POST` | `/api/v1/auth/refresh` | Public | Rotate a refresh token and issue a new token pair |
 | `POST` | `/api/v1/auth/logout` | Public | Revoke a refresh token |
 | `PATCH` | `/api/v1/admin/users/{id}/role` | Admin | Change a user's global role |
+| `GET` | `/api/v1/admin/outbox` | Admin | Inspect queued, processed, or dead-lettered notifications |
+| `POST` | `/api/v1/admin/outbox/{id}/replay` | Admin | Replay a dead-lettered notification |
 | `POST` | `/api/v1/projects` | Authenticated | Create a project |
 | `GET` | `/api/v1/projects` | Authenticated | List accessible projects |
 | `GET` | `/api/v1/projects/{id}` | Member | Read project details |
@@ -170,6 +176,8 @@ set -a && source .env && set +a
 | `METRICS_KEY` | Yes | Key supplied to the protected Prometheus endpoint |
 | `CACHE_TYPE` | No | Use `redis` with `SPRING_DATA_REDIS_HOST`, otherwise `simple` |
 | `EMAIL_NOTIFICATIONS_ENABLED` | No | Enables SMTP invitations when mail settings are present |
+| `OUTBOX_WORKER_ENABLED` | No | Enables the database-backed notification worker, defaults to `true` |
+| `OUTBOX_MAX_ATTEMPTS` | No | Delivery attempts before an event enters the dead-letter state, defaults to `5` |
 | `S3_ENABLED` | No | Enables presigned uploads; requires bucket, region, and AWS credentials |
 | `PORT` | No | HTTP port, defaults to `8080` |
 
@@ -196,6 +204,8 @@ curl -s http://localhost:8080/api/v1/projects \
 ```
 
 The suite combines fast H2 tests with a Docker-aware PostgreSQL Testcontainers migration test. It covers access rules, workflows, token rotation, protected routes, validation, project and sprint flows, assignment, filtering, cached summaries, audited work-item discussions, owner moderation, and cross-user authorization. `verify` also writes the JaCoCo HTML/XML report under `target/site/jacoco`.
+
+The [performance test guide](docs/performance.md) defines reproducible k6 smoke, load, and stress workloads. The manual GitHub Actions workflow exports raw results so published latency and throughput figures remain traceable to a specific run.
 
 CI runs the tests and SpotBugs, builds the production image, and blocks high or critical Trivy findings. Separate workflows run OWASP Dependency-Check, opt into SonarCloud when repository credentials are configured, open Dependabot updates, and create GitHub Releases from `v*` tags.
 
@@ -226,12 +236,11 @@ The production API runs on Render with a managed PostgreSQL 17 database:
 - Workflow transitions live in domain services instead of controllers, making the rules independently testable.
 - Refresh tokens are random opaque values; only SHA-256 digests are stored, and rotation revokes each used token under a database lock.
 - S3 uploads go directly from the client to object storage through short-lived presigned URLs, keeping file bytes outside the API process.
-- Email and WebSocket delivery are secondary effects; database state remains authoritative if an external delivery channel is unavailable.
+- Project membership and its email invitation outbox record commit atomically. Multiple workers coordinate through `FOR UPDATE SKIP LOCKED`; failed deliveries use bounded exponential retries before entering a replayable dead-letter state.
 - Symmetric JWT signing is appropriate for one service; an external identity provider and asymmetric key rotation are the next step for a multi-service environment.
 
 ## Future improvements
 
-- Transactional outbox and retry workers for guaranteed notifications
 - S3 completion verification, malware scanning, and attachment retention policies
 - Per-project roles in addition to the global role hierarchy
 - Email verification, account recovery, comment mentions, and work-item history views

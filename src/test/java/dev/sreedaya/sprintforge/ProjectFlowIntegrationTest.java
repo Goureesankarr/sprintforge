@@ -1,6 +1,10 @@
 package dev.sreedaya.sprintforge;
 
 import com.jayway.jsonpath.JsonPath;
+import dev.sreedaya.sprintforge.notification.NotificationOutbox;
+import dev.sreedaya.sprintforge.notification.NotificationOutboxRepository;
+import java.util.List;
+import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -23,6 +27,9 @@ class ProjectFlowIntegrationTest {
 
     @Autowired
     MockMvc mvc;
+
+    @Autowired
+    NotificationOutboxRepository outbox;
 
     @Test
     void createsProjectWorkItemAndBoardSummary() throws Exception {
@@ -84,6 +91,9 @@ class ProjectFlowIntegrationTest {
                         .header("Authorization", bearer(owner.token())))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.memberCount").value(2));
+
+        assertThat(outbox.countByStatusIn(List.of(NotificationOutbox.Status.PENDING)))
+                .isPositive();
 
         mvc.perform(get("/api/v1/projects/{projectId}", projectId)
                         .header("Authorization", bearer(colleague.token())))
