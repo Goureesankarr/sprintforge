@@ -1,0 +1,58 @@
+name: Performance test
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Workload profile
+        required: true
+        default: smoke
+        type: choice
+        options: [smoke, load, stress]
+      base_url:
+        description: SprintForge deployment to test
+        required: true
+        default: https://sprintforge-api.onrender.com
+        type: string
+      vus:
+        description: Virtual users for the load profile
+        required: false
+        default: "10"
+        type: string
+      duration:
+        description: Duration for the load profile
+        required: false
+        default: 2m
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  k6:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: grafana/setup-k6-action@v1
+      - name: Warm service and verify readiness
+        run: >-
+          curl --fail --retry 12 --retry-all-errors --retry-delay 10
+          "${{ inputs.base_url }}/actuator/health"
+      - name: Run k6 workload
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          PROFILE: ${{ inputs.profile }}
+          VUS: ${{ inputs.vus }}
+          DURATION: ${{ inputs.duration }}
+        run: >-
+          k6 run
+          --summary-export performance-summary.json
+          performance/k6/sprintforge.js
+      - name: Upload raw performance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k6-${{ inputs.profile }}-${{ github.run_id }}
+          path: performance-summary.json
+          if-no-files-found: warn
