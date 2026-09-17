@@ -42,6 +42,31 @@
         {"expr": "rate(sprintforge_sprints_status_changed_total[5m])", "legendFormat": "status changed", "refId": "B"}
       ],
       "gridPos": {"h": 10, "w": 24, "x": 0, "y": 18}
+    },
+    {
+      "type": "stat",
+      "title": "Outbox pending",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sprintforge_outbox_pending{application=\"SprintForge\"}", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 28}
+    },
+    {
+      "type": "stat",
+      "title": "Outbox dead-lettered",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sprintforge_outbox_dead{application=\"SprintForge\"}", "refId": "A"}],
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 28}
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox delivery outcomes",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {"expr": "rate(sprintforge_outbox_processed_total[5m])", "legendFormat": "processed", "refId": "A"},
+        {"expr": "rate(sprintforge_outbox_retried_total[5m])", "legendFormat": "retried", "refId": "B"},
+        {"expr": "rate(sprintforge_outbox_dead_lettered_total[5m])", "legendFormat": "dead-lettered", "refId": "C"}
+      ],
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 28}
     }
   ],
   "refresh": "15s",

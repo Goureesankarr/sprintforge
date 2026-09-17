@@ -143,10 +143,13 @@ public class ProjectController {
 
         User member = users.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new NotFoundException("User not found"));
-        project.getMembers().add(member);
+        if (!project.getMembers().add(member)) {
+            throw new ConflictException("User is already a project member");
+        }
         project.setUpdatedAt(Instant.now());
         recordAuditEvent(project, actor, "MEMBER_ADDED", member.getId());
-        notifications.projectInvitation(member.getEmail(), project.getName(), project.getId());
+        notifications.projectInvitation(
+                member.getEmail(), project.getName(), project.getId(), member.getId());
         events.publish(project.getId(), "MEMBER_ADDED", "USER", member.getId());
         log.info("Project member added: projectId={}, memberId={}", id, member.getId());
         return ProjectView.from(project);

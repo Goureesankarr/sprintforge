@@ -1,53 +1,52 @@
 package dev.sreedaya.sprintforge.notification;
 
+import java.time.Clock;
+import java.time.Instant;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class EmailNotificationService {
-    private static final Logger log = LoggerFactory.getLogger(EmailNotificationService.class);
-
-    private final ObjectProvider<JavaMailSender> mailSender;
-    private final boolean enabled;
-    private final String from;
+    private final NotificationOutboxRepository outbox;
+    private final Clock clock;
+    private final int maxAttempts;
 
     public EmailNotificationService(
-            ObjectProvider<JavaMailSender> mailSender,
-            @Value("${app.notifications.email.enabled:false}") boolean enabled,
-            @Value("${app.notifications.email.from:noreply@sprintforge.dev}") String from) {
-        this.mailSender = mailSender;
-        this.enabled = enabled;
-        this.from = from;
+            NotificationOutboxRepository outbox,
+            Clock clock,
+            @Value("${app.outbox.max-attempts:5}") int maxAttempts) {
+        this.outbox = outbox;
+        this.clock = clock;
+        this.maxAttempts = maxAttempts;
     }
 
-    @Async
-    public void projectInvitation(String recipient, String projectName, UUID projectId) {
-        if (!enabled) {
-            log.debug("Email disabled; project invitation not sent: projectId={}", projectId);
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void projectInvitation(
+            String recipient, String projectName, UUID projectId, UUID memberId) {
+        String idempotencyKey = "PROJECT_INVITATION:" + projectId + ":" + memberId;
+        if (outbox.existsByIdempotencyKey(idempotencyKey)) {
             return;
         }
-        SimpleMailMessage message = new SimpleMailMessage();
-        message.setFrom(from);
-        message.setTo(recipient);
-        message.setSubject("You were added to " + projectName);
-        message.setText("You now have access to project " + projectName
+
+        Instant now = clock.instant();
+        NotificationOutbox event = new NotificationOutbox();
+        event.setId(UUID.randomUUID());
+        event.setEventType("PROJECT_INVITATION");
+        event.setAggregateType("PROJECT");
+        event.setAggregateId(projectId);
+        event.setIdempotencyKey(idempotencyKey);
+        event.setRecipient(recipient);
+        event.setSubject("You were added to " + projectName);
+        event.setBody("You now have access to project " + projectName
                 + " in SprintForge. Project ID: " + projectId);
-        try {
-            JavaMailSender sender = mailSender.getIfAvailable();
-            if (sender == null) {
-                log.error("Email notifications are enabled but no mail sender is configured");
-                return;
-            }
-            sender.send(message);
-        } catch (RuntimeException exception) {
-            log.error("Project invitation email failed: projectId={}", projectId, exception);
-        }
+        event.setStatus(NotificationOutbox.Status.PENDING);
+        event.setAttempts(0);
+        event.setMaxAttempts(maxAttempts);
+        event.setNextAttemptAt(now);
+        event.setCreatedAt(now);
+        outbox.save(event);
     }
 }
